@@ -3,56 +3,32 @@ package main
 import (
 	"bufio"
 	"compress/bzip2"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
-	"html/template"
-	"io"
+	"github.com/blevesearch/bleve"
+	"github.com/creachadair/cityhash"
+	"github.com/d4l3k/go-pbzip2"
+	"github.com/pkg/errors"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/blevesearch/bleve"
-	"github.com/creachadair/cityhash"
-	pbzip2 "github.com/d4l3k/go-pbzip2"
-	"github.com/d4l3k/wikigopher/wikitext"
-	"github.com/pkg/errors"
 )
 
 var (
-	indexFile       = flag.String("index", "enwiki-latest-pages-articles-multistream-index.txt.bz2", "the index file to load")
-	articlesFile    = flag.String("articles", "enwiki-latest-pages-articles-multistream.xml.bz2", "the article dump file to load")
+	indexFile = flag.String("index", "/home/user/enwiki-20220101-pages-articles-multistream-index.txt.bz2",
+		"the index file to load")
+	articlesFile = flag.String("articles", "/home/user/enwiki-20220101-pages-articles-multistream.xml.bz2",
+		"the article dump file to load")
 	search          = flag.Bool("search", false, "whether or not to build a search index")
-	searchIndexFile = flag.String("searchIndex", "index.bleve", "the search index file")
+	searchIndexFile = flag.String("searchIndex", "/home/user/index.bleve", "the search index file")
 	httpAddr        = flag.String("http", ":8080", "the address to bind HTTP to")
 )
-
-var tmpls = map[string]*template.Template{}
-
-func loadTemplates() error {
-	files, err := filepath.Glob("templates/*")
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		name := filepath.Base(file)
-		tmpls[name], err = template.ParseFiles("templates/base.html", file)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func executeTemplate(wr io.Writer, name string, data interface{}) error {
-	return tmpls[name].ExecuteTemplate(wr, "base", data)
-}
 
 type indexEntry struct {
 	id, seek int
@@ -130,87 +106,26 @@ func loadIndex() error {
 	if !*search {
 		return nil
 	}
-
-	/*
-		log.Printf("Indexing titles...")
-		i = 0
-		batch := index.NewBatch()
-
-		mu.Lock()
-		defer mu.Unlock()
-
-		for key, entry := range mu.offsets {
-			mu.Unlock()
-
-			if err := batch.Index(key, entry); err != nil {
-				mu.Lock()
-				return err
-			}
-			i++
-			if i%100000 == 0 {
-				if err := index.Batch(batch); err != nil {
-					mu.Lock()
-					return err
-				}
-				batch.Reset()
-				log.Printf("indexed %d entries", i)
-			}
-
-			mu.Lock()
-		}
-
-		log.Printf("Done indexing!")
-	*/
-
 	return nil
 }
-
-/*
-Example:
-  <page>
-    <title>AccessibleComputing</title>
-    <ns>0</ns>
-    <id>10</id>
-    <redirect title="Computer accessibility" />
-    <revision>
-      <id>834079434</id>
-      <parentid>767284433</parentid>
-      <timestamp>2018-04-03T20:38:02Z</timestamp>
-      <contributor>
-        <username>امیر اعوانی</username>
-        <id>8214454</id>
-      </contributor>
-      <minor />
-      <model>wikitext</model>
-      <format>text/x-wiki</format>
-      <text xml:space="preserve">#REDIRECT [[Computer accessibility]]
-
-{{Redirect category shell}}
-{{R from move}}
-{{R from CamelCase}}
-{{R unprintworthy}}</text>
-      <sha1>qdiw0cwardl0qpkyeutu3pd77fwym8y</sha1>
-    </revision>
-  </page>
-*/
 
 type redirect struct {
 	Title string `xml:"title,attr"`
 }
 
 type page struct {
-	XMLName    xml.Name   `xml:"page"`
-	Title      string     `xml:"title"`
-	NS         int        `xml:"ns"`
-	ID         int        `xml:"id"`
-	Redirect   []redirect `xml:"redirect"`
-	RevisionID string     `xml:"revision>id"`
-	Timestamp  string     `xml:"revision>timestamp"`
-	Username   string     `xml:"revision>contributor>username"`
-	UserID     string     `xml:"revision>contributor>id"`
-	Model      string     `xml:"revision>model"`
-	Format     string     `xml:"revision>format"`
-	Text       string     `xml:"revision>text"`
+	XMLName    xml.Name   `xml:"page" json:"xml"`
+	Title      string     `xml:"title" json:"title"`
+	NS         int        `xml:"ns" json:"ns"`
+	ID         int        `xml:"id" json:"id"`
+	Redirect   []redirect `xml:"redirect" json:"redirects"`
+	RevisionID string     `xml:"revision>id" json:"revisionID"`
+	Timestamp  string     `xml:"revision>timestamp" json:"timestamp"`
+	Username   string     `xml:"revision>contributor>username" json:"-"`
+	UserID     string     `xml:"revision>contributor>id" json:"-"`
+	Model      string     `xml:"revision>model" json:"model"`
+	Format     string     `xml:"revision>format" json:"format"`
+	Text       string     `xml:"revision>text" json:"text"`
 }
 
 func readArticle(meta indexEntry) (page, error) {
@@ -293,97 +208,9 @@ func statusErrorf(code int, str string, args ...interface{}) error {
 	return errors.Wrapf(statusError(code), str, args...)
 }
 
-func errorHandler(f func(w http.ResponseWriter, r *http.Request) error) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := f(w, r); err != nil {
-			cause := errors.Cause(err)
-			status := http.StatusInternalServerError
-			if cause, ok := cause.(statusError); ok {
-				status = int(cause)
-			}
-			if err := executeTemplate(w, "error.html", struct {
-				Title, Error string
-			}{
-				Title: err.Error(),
-				Error: fmt.Sprintf("%+v", err),
-			}); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.WriteHeader(status)
-		}
-	}
-
-}
-
-func handleArticle(w http.ResponseWriter, r *http.Request) error {
-	articleName := wikitext.URLToTitle(path.Base(r.URL.Path))
-
-	if articleName == "Special:Random" {
-		article, err := randomArticle()
-		if err != nil {
-			return err
-		}
-		http.Redirect(w, r, path.Join("/wiki/", wikitext.TitleToURL(article.Title)), http.StatusTemporaryRedirect)
-		return nil
-	}
-
-	articleMeta, err := fetchArticle(articleName)
-	if err != nil {
-		return err
-	}
-
-	p, err := readArticle(articleMeta)
-	if err != nil {
-		return err
-	}
-
-	if p.Title != articleName {
-		http.Redirect(w, r, path.Join("/wiki/", wikitext.TitleToURL(p.Title)), http.StatusTemporaryRedirect)
-		return nil
-	}
-
-	body, err := wikitext.Convert(
-		[]byte(p.Text),
-		wikitext.TemplateHandler(p.templateHandler),
-	)
-	if err != nil {
-		return err
-	}
-	if err := executeTemplate(w, "article.html", struct {
-		Title string
-		Body  template.HTML
-	}{
-		Title: articleName,
-		Body:  template.HTML(body),
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func handleSource(w http.ResponseWriter, r *http.Request) error {
-	articleName := wikitext.URLToTitle(path.Base(r.URL.Path))
-
-	articleMeta, err := fetchArticle(articleName)
-	if err != nil {
-		return err
-	}
-	p, err := readArticle(articleMeta)
-	if err != nil {
-		return err
-	}
-	return executeTemplate(w, "source.html", p)
-}
-
-func handleIndex(w http.ResponseWriter, r *http.Request) error {
-	http.Redirect(w, r, "/wiki/Main_Page", http.StatusTemporaryRedirect)
-	return nil
-}
-
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("%+v", err)
+		log.Printf("%+v\n", err)
 	}
 }
 
@@ -393,18 +220,39 @@ func run() error {
 
 	go func() {
 		if err := loadIndex(); err != nil {
-			log.Fatalf("%+v", err)
+			log.Printf("%+v\n", err)
 		}
 	}()
 
-	if err := loadTemplates(); err != nil {
-		return err
-	}
+	http.HandleFunc("/search", func(writer http.ResponseWriter, request *http.Request) {
+		q := request.URL.Query().Get("q")
+		article, err := fetchArticle(q)
+		if err != nil {
+			return
+		}
 
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
-	http.HandleFunc("/source/", errorHandler(handleSource))
-	http.HandleFunc("/wiki/", errorHandler(handleArticle))
-	http.HandleFunc("/", errorHandler(handleIndex))
+		pg, err := readArticle(article)
+		if err != nil {
+			return
+		}
+		// //
+		// convert, err := wikitext.Convert([]byte(pg.Text))
+		// if err != nil {
+		// 	return
+		// }
+		// pg.Text = string(convert)
+		// pg.Text = string(convert)
+		marshal, err := json.Marshal(pg)
+		if err != nil {
+			return
+		}
+
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		_, err = writer.Write(marshal)
+		if err != nil {
+			return
+		}
+	})
 
 	log.Printf("Listening on %s...", *httpAddr)
 	return http.ListenAndServe(*httpAddr, nil)

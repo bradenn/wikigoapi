@@ -27,15 +27,15 @@ func Convert(text []byte, options ...ConvertOption) ([]byte, error) {
 		GlobalStore("len", len(text)),
 		GlobalStore("text", text),
 		GlobalStore("opts", opts),
-		//Memoize(true),
+		// Memoize(true),
 		Recover(false),
-		//Debug(true),
+		// Debug(true),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	//spew.Dump(v)
+	// spew.Dump(v)
 
 	var doc *html.Node
 
@@ -52,7 +52,7 @@ func Convert(text []byte, options ...ConvertOption) ([]byte, error) {
 		return nil, errors.Errorf("expected *html.Node got: %T", v)
 	}
 
-	//log.Printf("Token doc: %q", concat(doc))
+	// log.Printf("Token doc: %q", concat(doc))
 
 	remaining := processTokens(doc)
 	if opts.strict && len(remaining) > 0 {
@@ -306,7 +306,7 @@ func match(pattern string, input []byte) bool {
 
 func inlineBreaks(c *current) (bool, error) {
 	pos := c.pos.offset + len(c.text)
-	//log.Printf("inlineBreaks %s, %q, pos %d", c.pos, c.text, pos)
+	// log.Printf("inlineBreaks %s, %q, pos %d", c.pos, c.text, pos)
 	input := c.globalStore["text"].([]byte)
 	if len(input) <= pos {
 		log.Printf("inlinebreak false")
@@ -314,7 +314,7 @@ func inlineBreaks(c *current) (bool, error) {
 	}
 	ch := input[pos]
 	if !inlineBreaksRegexp.Match([]byte{ch}) {
-		//log.Printf("inlinebreak match fail: %s", []byte{ch})
+		// log.Printf("inlinebreak match fail: %s", []byte{ch})
 		return false, nil
 	}
 
@@ -326,7 +326,7 @@ func inlineBreaks(c *current) (bool, error) {
 		equal, _ := peek(c, "equal").(bool)
 		return equal || (count(c, "h") > 0 && (pos == len(input)-1 ||
 			// possibly more equals followed by spaces or comments
-			//TODO: use match(`^=*(?:[ \t]|<\!--(?:(?!-->)[^])*-->)*(?:[\r\n]|$)`, input[pos+1:]))), nil
+			// TODO: use match(`^=*(?:[ \t]|<\!--(?:(?!-->)[^])*-->)*(?:[\r\n]|$)`, input[pos+1:]))), nil
 			match(`^=*(?:[ \t]|<\!--.*-->)*(?:[\r\n]|$)`, input[pos+1:]))), nil
 
 	case '|':
@@ -354,12 +354,12 @@ func inlineBreaks(c *current) (bool, error) {
 		// FIXME: Presumably these should mix with and match | above.
 		tableCellArg, _ := peek(c, "tableCellArg").(bool)
 		table, _ := peek(c, "table").(bool)
-		return ((tableCellArg && string(input[pos:pos+5]) == "{{!}}") ||
-			(table && string(input[pos:pos+10]) == "{{!}}{{!}}")), nil
+		return (tableCellArg && string(input[pos:pos+5]) == "{{!}}") ||
+			(table && string(input[pos:pos+10]) == "{{!}}{{!}}"), nil
 
 	case '}':
 		preproc, _ := peek(c, "preproc").(string)
-		//log.Printf("inlineBreaks: } %q %q", preproc, input[pos:pos+2])
+		// log.Printf("inlineBreaks: } %q %q", preproc, input[pos:pos+2])
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case ':':
@@ -426,7 +426,7 @@ func inlineBreaks(c *current) (bool, error) {
 			return true, nil
 		}
 		preproc, _ := peek(c, "preproc").(string)
-		//log.Printf("inlineBreaks extlink:%#v, preproc:%#v", extlink, preproc)
+		// log.Printf("inlineBreaks extlink:%#v, preproc:%#v", extlink, preproc)
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case '<':
